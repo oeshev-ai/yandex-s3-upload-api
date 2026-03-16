@@ -1,0 +1,24 @@
+{
+  "name": "yc-upload-url-api",
+  "version": "1.0.0",
+  "description": "API for generating signed upload URLs for Yandex Object Storage",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.865.0",
+    "@aws-sdk/s3-request-presigner": "^3.865.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
