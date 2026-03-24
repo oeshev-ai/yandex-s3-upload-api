@@ -1,10 +1,9 @@
-const crypto = require("crypto");
 const path = require("path");
 
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 dotenv.config();
@@ -19,6 +18,8 @@ const accessKeyId = process.env.YC_ACCESS_KEY_ID;
 const secretAccessKey = process.env.YC_SECRET_ACCESS_KEY;
 const expiresIn = Number(process.env.SIGNED_URL_EXPIRES_IN || 300);
 const jsonBodyLimit = process.env.JSON_BODY_LIMIT || "1mb";
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || "";
+const telegramTeacherChatId = process.env.TELEGRAM_TEACHER_CHAT_ID || "";
 
 const defaultMimeTypes = ["image/jpeg", "image/png", "application/pdf"];
 const allowedMimeTypes = (process.env.ALLOWED_MIME_TYPES || "")
@@ -74,9 +75,20 @@ function sanitizeFileName(fileName) {
   return baseName.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+function sanitizeUserName(userName) {
+  const normalized = String(userName || "").trim().normalize("NFKC");
+  const cleaned = normalized
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}._-]/gu, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return cleaned || "unknown_user";
+}
+
 function validateGetUploadUrlPayload(payload) {
   const errors = [];
-  const { fileName, fileType, userId } = payload || {};
+  const { fileName, fileType, userId, userName } = payload || {};
 
   if (!fileName || typeof fileName !== "string") {
     errors.push("fileName is required and must be a string");
@@ -87,11 +99,37 @@ function validateGetUploadUrlPayload(payload) {
   if (!userId || typeof userId !== "string") {
     errors.push("userId is required and must be a string");
   }
+  if (!userName || typeof userName !== "string") {
+    errors.push("userName is required and must be a string");
+  }
   if (fileType && !effectiveMimeTypes.includes(fileType)) {
     errors.push(`fileType is not allowed. Allowed: ${effectiveMimeTypes.join(", ")}`);
   }
 
   return errors;
+}
+
+async function sendTeacherNotification(text) {
+  if (!telegramBotToken || !telegramTeacherChatId) {
+    return { sent: false, reason: "telegram env is not configured" };
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: telegramTeacherChatId,
+      text,
+      disable_web_page_preview: true
+    })
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Telegram send failed (${response.status}): ${details}`);
+  }
+
+  return { sent: true };
 }
 
 app.get("/health", (_req, res) => {
@@ -111,11 +149,15 @@ app.post("/api/get-upload-url", async (req, res) => {
       return res.status(400).json({ error: "Validation failed", details: errors });
     }
 
-    const { fileName, fileType, userId, userEmail } = req.body;
+    const { fileName, fileType, userId, userName, userEmail, userText } = req.body;
     const safeFileName = sanitizeFileName(fileName);
+    const safeUserName = sanitizeUserName(userName);
     const timestamp = Date.now();
-    const randomSuffix = crypto.randomBytes(4).toString("hex");
-    const objectKey = `uploads/${userId}/${timestamp}-${randomSuffix}-${safeFileName}`;
+    const objectKey = `uploads/${userId}_${safeUserName}/${timestamp}-${safeFileName}`;
+    const hasUserText = typeof userText === "string" && userText.trim().length > 0;
+    const textObjectKey = hasUserText
+      ? `uploads/${userId}_${safeUserName}/${timestamp}-comment.txt`
+      : null;
 
     const putCommand = new PutObjectCommand({
       Bucket: bucketName,
@@ -125,10 +167,24 @@ app.post("/api/get-upload-url", async (req, res) => {
     });
 
     const signedUrl = await getSignedUrl(s3Client, putCommand, { expiresIn });
+    const textSignedUrl = hasUserText
+      ? await getSignedUrl(
+          s3Client,
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: textObjectKey,
+            ContentType: "text/plain; charset=utf-8",
+            Metadata: userEmail ? { "user-email": String(userEmail) } : undefined
+          }),
+          { expiresIn }
+        )
+      : null;
 
     return res.json({
       signedUrl,
       objectKey,
+      textSignedUrl,
+      textObjectKey,
       expiresIn
     });
   } catch (error) {
@@ -139,25 +195,97 @@ app.post("/api/get-upload-url", async (req, res) => {
   }
 });
 
-app.post("/api/upload-complete", (req, res) => {
-  const { userId, objectKey, fileName, fileSize } = req.body || {};
-  if (!userId || !objectKey || !fileName) {
-    return res.status(400).json({
-      error: "Validation failed",
-      details: ["userId, objectKey, fileName are required"]
+app.post("/api/upload-complete", async (req, res) => {
+  try {
+    if (!bucketName || !accessKeyId || !secretAccessKey) {
+      return res.status(500).json({
+        error: "Server is not configured. Missing storage credentials or bucket settings."
+      });
+    }
+
+    const {
+      userId,
+      userName,
+      userEmail,
+      objectKey,
+      textObjectKey,
+      fileName,
+      fileSize,
+      uploadedAt
+    } = req.body || {};
+
+    const errors = [];
+    if (!userId || typeof userId !== "string") errors.push("userId is required and must be a string");
+    if (!userName || typeof userName !== "string")
+      errors.push("userName is required and must be a string");
+    if (!objectKey || typeof objectKey !== "string")
+      errors.push("objectKey is required and must be a string");
+    if (!fileName || typeof fileName !== "string")
+      errors.push("fileName is required and must be a string");
+    if (errors.length > 0) {
+      return res.status(400).json({ error: "Validation failed", details: errors });
+    }
+
+    const expectedPrefix = `uploads/${userId}_`;
+    if (!objectKey.startsWith(expectedPrefix)) {
+      return res.status(400).json({
+        error: "Validation failed",
+        details: ["objectKey does not match userId prefix"]
+      });
+    }
+
+    const headMainObject = await s3Client.send(
+      new HeadObjectCommand({
+        Bucket: bucketName,
+        Key: objectKey
+      })
+    );
+
+    let commentExists = false;
+    if (textObjectKey && typeof textObjectKey === "string") {
+      try {
+        await s3Client.send(
+          new HeadObjectCommand({
+            Bucket: bucketName,
+            Key: textObjectKey
+          })
+        );
+        commentExists = true;
+      } catch (_error) {
+        commentExists = false;
+      }
+    }
+
+    const notificationLines = [
+      `Поступил вопрос эксперту от: ${userName} (ID: ${userId})`,
+      `Email: ${userEmail || "-"}`,
+      `Файл: ${fileName}`,
+      `Размер: ${fileSize ?? headMainObject.ContentLength ?? "-"} байт`,
+      `Комментарий: ${commentExists ? "есть" : "нет"}`,
+      `Время: ${uploadedAt || new Date().toISOString()}`
+    ];
+
+    let notifyResult = { sent: false, reason: "not attempted" };
+    try {
+      notifyResult = await sendTeacherNotification(notificationLines.join("\n"));
+    } catch (notificationError) {
+      console.error("[upload-complete] telegram error:", notificationError);
+      notifyResult = { sent: false, reason: notificationError.message };
+    }
+
+    return res.json({
+      ok: true,
+      objectExists: true,
+      commentExists,
+      notified: notifyResult.sent,
+      notifyReason: notifyResult.reason || null
+    });
+  } catch (error) {
+    console.error("[upload-complete] error:", error);
+    return res.status(500).json({
+      error: "Internal server error"
     });
   }
-
-  // Placeholder hook: here you can call GetCourse API or store logs.
-  console.log("[upload-complete]", {
-    userId,
-    objectKey,
-    fileName,
-    fileSize: fileSize ?? null,
-    at: new Date().toISOString()
-  });
-
-  return res.json({ ok: true });
 });
 
 app.use((err, _req, res, _next) => {
