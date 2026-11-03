@@ -1,273 +1,547 @@
 <style>
+
     .upload-container {
+
         max-width: 500px;
+
         margin: 10px auto;
+
         padding: 20px;
+
         border: 1px solid #ddd;
+
         border-radius: 8px;
+
         font-family: Arial, sans-serif;
+
     }
+
     .upload-container h3 {
+
         margin-top: 0;
+
         color: #333;
+
     }
+
     #user-info {
+
         background: #f5f5f5;
+
         padding: 5px;
+
         border-radius: 4px;
+
         margin-bottom: 20px;
+
         font-size: 14px;
+
     }
+
     #user-info p {
+
         margin: 5px 0;
+
     }
+
     input[type="file"] {
+
         width: 100%;
+
         padding: 10px;
+
         margin-bottom: 15px;
+
         border: 1px solid #ccc;
+
         border-radius: 4px;
+
         box-sizing: border-box;
+
     }
+
     textarea {
+
         width: 100%;
+
         min-height: 100px;
+
         padding: 10px;
+
         margin-bottom: 15px;
+
         border: 1px solid #ccc;
+
         border-radius: 4px;
+
         box-sizing: border-box;
+
         font-family: Arial, sans-serif;
+
         resize: vertical;
+
     }
+
     button {
+
         background: #4CAF50;
+
         color: white;
+
         padding: 8px 20px;
+
         border: none;
+
         border-radius: 4px;
+
         cursor: pointer;
+
         width: 100%;
+
         font-size: 14px;
+
     }
+
     button:hover {
+
         background: #45a049;
+
     }
+
     button:disabled {
+
         background: #cccccc;
+
         cursor: not-allowed;
+
     }
+
     .progress {
+
         width: 100%;
+
         height: 20px;
+
         background: #f0f0f0;
+
         margin: 15px 0;
+
         border-radius: 4px;
+
         display: none;
+
         overflow: hidden;
+
     }
+
     .progress-bar {
+
         width: 0%;
+
         height: 100%;
+
         background: #4CAF50;
+
         transition: width 0.3s;
+
     }
+
     .status {
+
         margin-top: 15px;
+
         padding: 10px;
+
         border-radius: 4px;
+
         display: none;
+
     }
+
     .success {
+
         background: #d4edda;
+
         color: #155724;
+
         border: 1px solid #c3e6cb;
+
     }
+
     .error {
+
         background: #f8d7da;
+
         color: #721c24;
+
         border: 1px solid #f5c6cb;
+
     }
+
 </style>
 
+
+
 <div class="upload-container">
+
     <h3>Загрузите МРТ исследование</h3>
+
     <h4>принимаются файлы в форматах: zip, jpg, png</h4>
 
-    <input type="file" id="fileInput" accept=".zip,.jpg,.jpeg,.png,application/zip,image/jpeg,image/png">
-    <textarea id="textInput" placeholder="Введите комментарий к исследованию (будет загружен как comment.txt)"></textarea>
+
+
+    <input type="file" id="fileInput" accept=".zip,.jpg,.jpeg,.png,application/zip,application/x-zip-compressed,image/jpeg,image/png">
+
+    <textarea id="textInput" placeholder="Введите комментарий к исследованию"></textarea>
+
     <!-- Передаём в функцию также first_name и last_name через макросы -->
+
     <button onclick="uploadFile('{uid}', '{email}', '{first_name}', '{last_name}')" id="uploadBtn">ЗАГРУЗИТЬ</button>
 
+
+
     <div class="progress" id="progress">
+
         <div class="progress-bar" id="progressBar"></div>
+
     </div>
 
+
+
     <div class="status" id="status"></div>
+
 </div>
 
+
+
 <script>
+
     const ALLOWED_EXTENSIONS = ['zip', 'jpg', 'jpeg', 'png'];
-    const ALLOWED_MIME_TYPES = ['application/zip', 'image/jpeg', 'image/png'];
+
+    const ALLOWED_MIME_TYPES = ['application/zip', 'application/x-zip-compressed', 'image/jpeg', 'image/png'];
+
+
 
     function showStatus(message, type) {
+
         const statusDiv = document.getElementById('status');
+
         statusDiv.textContent = message;
+
         statusDiv.className = 'status ' + type;
+
         statusDiv.style.display = 'block';
+
     }
+
+
 
     function isAllowedFileType(file) {
+
         const fileName = (file?.name || '').toLowerCase();
+
         const extension = fileName.includes('.') ? fileName.split('.').pop() : '';
+
         const mimeType = (file?.type || '').toLowerCase();
 
+
+
         const extensionAllowed = ALLOWED_EXTENSIONS.includes(extension);
+
         const mimeAllowed = !mimeType || ALLOWED_MIME_TYPES.includes(mimeType);
+
         return extensionAllowed && mimeAllowed;
+
     }
 
+
+
     // Функция принимает теперь ещё имя и фамилию
+
     async function uploadFile(userId, userEmail, firstName, lastName) {
+
         const fileInput = document.getElementById('fileInput');
+
         const textInput = document.getElementById('textInput');
+
         const file = fileInput.files[0];
+
         const userText = textInput.value.trim();
+
         const progressDiv = document.getElementById('progress');
+
         const progressBar = document.getElementById('progressBar');
+
         const uploadBtn = document.getElementById('uploadBtn');
 
+
+
         // Проверка выбора файла
+
         if (!file) {
+
             showStatus('Выберите файл!', 'error');
+
             return;
+
         }
+
+
 
         if (!isAllowedFileType(file)) {
+
             showStatus('Допустимые форматы: zip, jpg, png. Выберите другой файл.', 'error');
+
             fileInput.value = '';
+
             return;
+
         }
+
+
 
         // Проверка, что данные пользователя получены
+
         if (!userId || !userEmail) {
+
             showStatus('Ошибка идентификации пользователя. Обновите страницу или войдите в аккаунт.', 'error');
+
             return;
+
         }
 
+
+
         // Формируем полное имя: объединяем имя и фамилию, убираем лишние пробелы
+
         const fullName = (firstName + ' ' + lastName).trim();
 
+
+
         uploadBtn.disabled = true;
+
         showStatus('Получаем ссылку для загрузки...', 'success');
 
+
+
         try {
-            const response = await fetch('https://www.mrischool.ru/api/get-upload-url', {
+
+            const response = await fetch('https://mrischool.ru/api/get-upload-url', {
+
                 method: 'POST',
+
                 headers: { 'Content-Type': 'application/json' },
+
                 body: JSON.stringify({
+
                     fileName: file.name,
+
                     fileType: file.type,
+
                     userId: userId,
+
                     userEmail: userEmail,
+
                     userName: fullName, // Добавляем имя пользователя
+
                     userText: userText
+
                 })
+
             });
 
+
+
             if (!response.ok) {
+
                 throw new Error(`Ошибка получения ссылки (код ${response.status})`);
+
             }
+
+
 
             const { signedUrl, objectKey, textSignedUrl, textObjectKey } = await response.json();
 
+
+
             showStatus('Загрузка файла...', 'success');
+
             progressDiv.style.display = 'block';
+
+
 
             const xhr = new XMLHttpRequest();
 
+
+
             xhr.upload.addEventListener('progress', (e) => {
+
                 if (e.lengthComputable) {
+
                     progressBar.style.width = (e.loaded / e.total * 100) + '%';
+
                 }
+
             });
+
+
 
             xhr.addEventListener('load', async () => {
+
                 if (xhr.status === 200) {
+
                     try {
+
                         if (userText && textSignedUrl) {
+
                             const textUploadResponse = await fetch(textSignedUrl, {
+
                                 method: 'PUT',
+
                                 headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+
                                 body: userText
+
                             });
+
                             if (!textUploadResponse.ok) {
+
                                 throw new Error(`Текст не загружен (код ${textUploadResponse.status})`);
+
                             }
+
                         }
+
+
 
                         // Сообщаем backend, что загрузка завершена, чтобы отправить уведомление учителю
-                        const completeResponse = await fetch('https://www.mrischool.ru/api/upload-complete', {
+
+                        const completeResponse = await fetch('https://mrischool.ru/api/upload-complete', {
+
                             method: 'POST',
+
                             headers: { 'Content-Type': 'application/json' },
+
                             body: JSON.stringify({
+
                                 userId: userId,
+
                                 userName: fullName,
+
                                 userEmail: userEmail,
+
                                 objectKey: objectKey,
+
                                 textObjectKey: textObjectKey,
+
                                 fileName: file.name,
+
                                 fileSize: file.size,
+
                                 uploadedAt: new Date().toISOString()
+
                             })
+
                         });
+
                         if (!completeResponse.ok) {
+
                             throw new Error(`Ошибка подтверждения загрузки (код ${completeResponse.status})`);
+
                         }
 
+
+
                         showStatus('Файл успешно загружен!', 'success');
+
                         progressBar.style.width = '100%';
+
                     } catch (textError) {
+
                         showStatus(
+
                             'Файл загружен, но не удалось завершить обработку: ' + textError.message,
+
                             'error'
+
                         );
+
                     }
 
+
+
                     // Очистка формы
+
                     fileInput.value = '';
+
                     textInput.value = '';
+
                     progressDiv.style.display = 'none';
+
                     progressBar.style.width = '0%';
 
+
+
                     // Скрыть сообщение через 3 секунды (можно удалить или изменить время)
+
                     //setTimeout(() => {
+
                     //    const statusDiv = document.getElementById('status');
+
                     //    statusDiv.style.display = 'none';
+
                     //}, 3000);
 
+
+
                 } else {
+
                     showStatus(`Ошибка загрузки (код ${xhr.status})`, 'error');
+
                 }
+
                 uploadBtn.disabled = false;
+
             });
+
+
 
             xhr.addEventListener('error', () => {
+
                 showStatus('Ошибка сети', 'error');
+
                 uploadBtn.disabled = false;
+
             });
 
+
+
             xhr.open('PUT', signedUrl);
+
             xhr.setRequestHeader('Content-Type', file.type);
+
             xhr.send(file);
 
+
+
         } catch (error) {
+
             showStatus('Ошибка: ' + error.message, 'error');
+
             uploadBtn.disabled = false;
+
             progressDiv.style.display = 'none';
+
         }
+
     }
 
+
+
     // Отобразим email на странице для информации
-    document.getElementById('user-email').textContent = '{email}';
+
+    var userEmailEl = document.getElementById('user-email');
+
+    if (userEmailEl) userEmailEl.textContent = '{email}';
+
 </script>
